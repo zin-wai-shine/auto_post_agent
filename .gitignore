@@ -1,0 +1,35 @@
+# Binaries and build artifacts
+build/
+sa
+super-agent
+
+# Node dependencies
+ui/node_modules/
+ui/dist/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Debugging and logs
+*.log
+*.png
+debug_fb_post.png
+dry_run_success.png
+textbox_failed.png
+
+# Staging and data
+staging/
+downloads/
+
+# Local configuration and credentials
+.env
+.env.local
+.env.*.local
+*.yaml.local
+config.local.yaml

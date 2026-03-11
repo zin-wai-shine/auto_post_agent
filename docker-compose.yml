@@ -1,0 +1,26 @@
+# Super-Agent: Docker Compose for Development
+# Spins up PostgreSQL with pgvector + PostGIS extensions
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: superagent-db
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: superagent
+      POSTGRES_USER: superagent
+      POSTGRES_PASSWORD: superagent_dev_2024
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./internal/database/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U superagent -d superagent" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+    driver: local
