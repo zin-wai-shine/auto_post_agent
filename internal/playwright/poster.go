@@ -3,11 +3,11 @@ package playwright
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/playwright-community/playwright-go"
-	"github.com/zinwaishine/super-agent/internal/config"
 )
 
 type PostOptions struct {
@@ -23,14 +23,11 @@ type PostOptions struct {
 
 // PostListing automates a browser to post to Facebook.
 func PostListing(opts PostOptions) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
 
-	sessionPath := expandTilde(cfg.Facebook.SessionPath)
-	if _, err := os.Stat(sessionPath); err != nil {
-		return fmt.Errorf("no facebook session found. Please run 'super-agent auth facebook' first")
+	home, _ := os.UserHomeDir()
+	profileDir := filepath.Join(home, ".super-agent", "browser-profile")
+	if _, err := os.Stat(profileDir); err != nil {
+		return fmt.Errorf("no facebook profile found. Please run 'super-agent auth facebook' first or download an image to trigger login")
 	}
 
 	fmt.Println("🤖 Booting Playwright Sniper Bot...")
@@ -41,27 +38,25 @@ func PostListing(opts PostOptions) error {
 	}
 	defer pw.Stop()
 
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(opts.Headless),
+	context, err := pw.Chromium.LaunchPersistentContext(profileDir, playwright.BrowserTypeLaunchPersistentContextOptions{
+		Headless:  playwright.Bool(opts.Headless),
+		Viewport:  &playwright.Size{Width: 1280, Height: 720},
+		UserAgent: playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	})
 	if err != nil {
 		return fmt.Errorf("could not launch browser: %w", err)
 	}
-	defer browser.Close()
-
-	context, err := browser.NewContext(playwright.BrowserNewContextOptions{
-		StorageStatePath: playwright.String(sessionPath),
-		Viewport:         &playwright.Size{Width: 1280, Height: 720},
-		UserAgent:        playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-	})
-	if err != nil {
-		return fmt.Errorf("could not create context: %w", err)
-	}
 	defer context.Close()
 
-	page, err := context.NewPage()
-	if err != nil {
-		return fmt.Errorf("could not create page: %w", err)
+	pages := context.Pages()
+	var page playwright.Page
+	if len(pages) > 0 {
+		page = pages[0]
+	} else {
+		page, err = context.NewPage()
+		if err != nil {
+			return fmt.Errorf("could not create page: %w", err)
+		}
 	}
 
 	if opts.Target == "pages" {

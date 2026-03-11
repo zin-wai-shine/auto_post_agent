@@ -14,21 +14,15 @@ import (
 // Authenticate opens a visible browser for the user to log into Facebook,
 // wait for them to log in successfully, and saves their session state to disk.
 func Authenticate() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Make sure the directory for the session file exists
-	sessionPath := expandTilde(cfg.Facebook.SessionPath)
-	sessionDir := filepath.Dir(sessionPath)
-	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+	home, _ := os.UserHomeDir()
+	profileDir := filepath.Join(home, ".super-agent", "browser-profile")
+	if err := os.MkdirAll(profileDir, 0755); err != nil {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
 	fmt.Println("🚀 Starting Browser for Facebook Authentication...")
 
-	err = playwright.Install(&playwright.RunOptions{
+	err := playwright.Install(&playwright.RunOptions{
 		Browsers: []string{"chromium"},
 	})
 	if err != nil {
@@ -41,38 +35,26 @@ func Authenticate() error {
 	}
 	defer pw.Stop()
 
-	// Launch in non-headless mode so the user can see and type
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(false),
+	// Launch persistent context
+	context, err := pw.Chromium.LaunchPersistentContext(profileDir, playwright.BrowserTypeLaunchPersistentContextOptions{
+		Headless:  playwright.Bool(false),
+		Viewport:  &playwright.Size{Width: 1280, Height: 720},
+		UserAgent: playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
 	})
 	if err != nil {
 		return fmt.Errorf("could not launch browser: %w", err)
 	}
-	defer browser.Close()
-
-	// If we already have a session, we can load it to see if they're still logged in.
-	// Otherwise, we create a fresh context.
-	var context playwright.BrowserContext
-	if _, statErr := os.Stat(sessionPath); statErr == nil {
-		fmt.Println("♻️  Found existing session, loading it...")
-		context, err = browser.NewContext(playwright.BrowserNewContextOptions{
-			StorageStatePath: playwright.String(sessionPath),
-			Viewport:         &playwright.Size{Width: 1280, Height: 720},
-		})
-	} else {
-		context, err = browser.NewContext(playwright.BrowserNewContextOptions{
-			Viewport: &playwright.Size{Width: 1280, Height: 720},
-		})
-	}
-
-	if err != nil {
-		return fmt.Errorf("could not create context: %w", err)
-	}
 	defer context.Close()
 
-	page, err := context.NewPage()
-	if err != nil {
-		return fmt.Errorf("could not create page: %w", err)
+	pages := context.Pages()
+	var page playwright.Page
+	if len(pages) > 0 {
+		page = pages[0]
+	} else {
+		page, err = context.NewPage()
+		if err != nil {
+			return fmt.Errorf("could not create page: %w", err)
+		}
 	}
 
 	fmt.Println("🌐 Navigating to Facebook. Please log in if you haven't already.")
@@ -83,12 +65,9 @@ func Authenticate() error {
 	}
 
 	// We wait until we detect they are logged in.
-	// A good indicator of being logged in is the presence of the profile picture account switcher or the "Pages" header.
-	// We'll give the user 5 minutes to log in.
 	fmt.Println("⏳ Waiting for successful login (timeout in 5 minutes)....")
 
 	// Wait for an element that only appears when logged in.
-	// We'll wait for the aria-label="Account" or "Profile" or the Facebook nav bar
 	_, err = page.WaitForSelector(`div[role="navigation"]`, playwright.PageWaitForSelectorOptions{
 		Timeout: playwright.Float(300000), // 5 minutes
 	})
@@ -99,12 +78,8 @@ func Authenticate() error {
 	// Give it an extra few seconds to make sure cookies drop
 	time.Sleep(3 * time.Second)
 
-	fmt.Println("✅ Login detected! Saving your session securely to:", sessionPath)
-	if _, err := context.StorageState(sessionPath); err != nil {
-		return fmt.Errorf("failed to save session state: %w", err)
-	}
-
-	fmt.Println("🔒 Session securely saved. Super-Agent can now post on your behalf.")
+	fmt.Println("✅ Login detected! Your session is securely saved in the browser profile.")
+	fmt.Println("🔒 Super-Agent can now post on your behalf.")
 	return nil
 }
 
