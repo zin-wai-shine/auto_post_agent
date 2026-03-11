@@ -47,12 +47,51 @@ func DownloadImages(opts DownloadOptions) error {
 		sessionPath = filepath.Join(home, ".super-agent", "fb-session.json")
 	}
 
-	contextOpts := playwright.BrowserNewContextOptions{
-		Viewport:  &playwright.Size{Width: 1920, Height: 1080},
-		UserAgent: playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+	// If no saved session exists, login first BEFORE navigating to the post
+	if _, err := os.Stat(sessionPath); err != nil {
+		fmt.Println("🔐 No saved Facebook session found. Logging in first...")
+
+		// Create a temporary context to login
+		loginCtx, err := browser.NewContext(playwright.BrowserNewContextOptions{
+			Viewport:  &playwright.Size{Width: 1280, Height: 720},
+			UserAgent: playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+		})
+		if err != nil {
+			return fmt.Errorf("could not create login context: %w", err)
+		}
+
+		loginPage, err := loginCtx.NewPage()
+		if err != nil {
+			loginCtx.Close()
+			return fmt.Errorf("could not create login page: %w", err)
+		}
+
+		if err := LoginWithCredentials(loginPage, cfg); err != nil {
+			loginCtx.Close()
+			return fmt.Errorf("auto-login failed: %w", err)
+		}
+
+		// Save session after successful login
+		sessionDir := filepath.Dir(sessionPath)
+		if err := os.MkdirAll(sessionDir, 0755); err != nil {
+			loginCtx.Close()
+			return fmt.Errorf("could not create session directory: %w", err)
+		}
+		if _, err := loginCtx.StorageState(sessionPath); err != nil {
+			loginCtx.Close()
+			return fmt.Errorf("could not save session: %w", err)
+		}
+		fmt.Println("🔒 Session saved! You won't need to login again:", sessionPath)
+		loginCtx.Close()
+	} else {
+		fmt.Println("✅ Loaded saved Facebook session. No login needed.")
 	}
-	if _, err := os.Stat(sessionPath); err == nil {
-		contextOpts.StorageStatePath = playwright.String(sessionPath)
+
+	// Now create the main context with the saved session loaded
+	contextOpts := playwright.BrowserNewContextOptions{
+		Viewport:         &playwright.Size{Width: 1920, Height: 1080},
+		UserAgent:        playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+		StorageStatePath: playwright.String(sessionPath),
 	}
 
 	context, err := browser.NewContext(contextOpts)
@@ -70,11 +109,6 @@ func DownloadImages(opts DownloadOptions) error {
 		return fmt.Errorf("could not navigate: %w", err)
 	}
 	time.Sleep(5 * time.Second)
-
-	// Check if we hit a login wall (e.g. private group posts)
-	if err := EnsureLoggedIn(page, context, opts.URL, cfg); err != nil {
-		return fmt.Errorf("auto-login failed: %w", err)
-	}
 
 	if err := os.MkdirAll(opts.SavePath, os.ModePerm); err != nil {
 		return fmt.Errorf("could not create directory: %w", err)
