@@ -327,11 +327,29 @@ func downloadCommerceImages(page playwright.Page, opts DownloadOptions) error {
 	thumbnailButtons := page.Locator(`div[aria-label^="Thumbnail"]`)
 	thumbCount, _ := thumbnailButtons.Count()
 
+	// Helper to find the ACTUAL large image via JS
+	getHeroSrc := func() (string, error) {
+		srcObj, err := page.Evaluate(`
+			() => {
+				const imgs = Array.from(document.querySelectorAll('img.xz74otr.x15mokao, img[alt^="Listing image"]'));
+				const hero = imgs.find(img => {
+					const isVisible = img.offsetWidth > 0 && img.offsetHeight > 0;
+					const isLarge = img.naturalWidth > 500 || img.naturalHeight > 500;
+					const inButton = img.closest('button') || img.closest('[role="button"]');
+					return isVisible && isLarge && !inButton;
+				});
+				return hero ? hero.getAttribute('src') : "";
+			}
+		`)
+		if err != nil || srcObj == nil {
+			return "", err
+		}
+		return srcObj.(string), nil
+	}
+
 	if thumbCount == 0 {
-		// Try to grab at least the single main image if no thumbnails exist
 		fmt.Println("   ⚠️  No thumbnails found, trying to download main image...")
-		mainImg := page.Locator(`img.xz74otr.x15mokao, img[alt^="Listing image"]`).First()
-		src, _ := mainImg.GetAttribute("src")
+		src, _ := getHeroSrc()
 		if src != "" {
 			filePath := filepath.Join(opts.SavePath, "listing_image_1.jpg")
 			if err := downloadFile(src, filePath); err == nil {
@@ -346,31 +364,14 @@ func downloadCommerceImages(page playwright.Page, opts DownloadOptions) error {
 	downloadedCount := 0
 	for i := 0; i < thumbCount; i++ {
 		// Click the thumbnail to load high-res
-		thumbnailButtons.Nth(i).Click()
-		time.Sleep(1500 * time.Millisecond)
+		// We force click even index 0 to ensure the hero image refreshes from any placeholder
+		thumbnailButtons.Nth(i).Click(playwright.LocatorClickOptions{Force: playwright.Bool(true)})
+		time.Sleep(2 * time.Second)
 
 		// Find the main image using a robust evaluation that skips emojis/icons
-		srcObj, err := page.Evaluate(`
-			() => {
-				const imgs = Array.from(document.querySelectorAll('img.xz74otr.x15mokao, img[alt^="Listing image"]'));
-				// Find the one that is actually large and NOT in a button
-				const hero = imgs.find(img => {
-					const isVisible = img.offsetWidth > 0 && img.offsetHeight > 0;
-					const isLarge = img.naturalWidth > 500 || img.naturalHeight > 500;
-					const inButton = img.closest('button') || img.closest('[role="button"]');
-					return isVisible && isLarge && !inButton;
-				});
-				return hero ? hero.getAttribute('src') : "";
-			}
-		`)
-
-		src := ""
-		if err == nil && srcObj != nil {
-			src = srcObj.(string)
-		}
-
-		if src == "" {
-			// Fallback to simple selection if JS fails
+		src, err := getHeroSrc()
+		if err != nil || src == "" {
+			// Emergency fallback if helper fails
 			mainImg := page.Locator(`img.xz74otr.x15mokao, img[alt^="Listing image"]`).First()
 			src, _ = mainImg.GetAttribute("src")
 		}
