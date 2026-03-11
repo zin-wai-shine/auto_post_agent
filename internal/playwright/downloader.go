@@ -349,10 +349,33 @@ func downloadCommerceImages(page playwright.Page, opts DownloadOptions) error {
 		thumbnailButtons.Nth(i).Click()
 		time.Sleep(1500 * time.Millisecond)
 
-		// Find the main image that matches common marketplace classes
-		mainImg := page.Locator(`img.xz74otr.x15mokao, img[alt^="Listing image"]`).First()
-		src, err := mainImg.GetAttribute("src")
-		if err != nil || src == "" {
+		// Find the main image using a robust evaluation that skips emojis/icons
+		srcObj, err := page.Evaluate(`
+			() => {
+				const imgs = Array.from(document.querySelectorAll('img.xz74otr.x15mokao, img[alt^="Listing image"]'));
+				// Find the one that is actually large and NOT in a button
+				const hero = imgs.find(img => {
+					const isVisible = img.offsetWidth > 0 && img.offsetHeight > 0;
+					const isLarge = img.naturalWidth > 500 || img.naturalHeight > 500;
+					const inButton = img.closest('button') || img.closest('[role="button"]');
+					return isVisible && isLarge && !inButton;
+				});
+				return hero ? hero.getAttribute('src') : "";
+			}
+		`)
+
+		src := ""
+		if err == nil && srcObj != nil {
+			src = srcObj.(string)
+		}
+
+		if src == "" {
+			// Fallback to simple selection if JS fails
+			mainImg := page.Locator(`img.xz74otr.x15mokao, img[alt^="Listing image"]`).First()
+			src, _ = mainImg.GetAttribute("src")
+		}
+
+		if src == "" {
 			continue
 		}
 
