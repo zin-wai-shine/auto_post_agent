@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/playwright-community/playwright-go"
-	"github.com/zinwaishine/super-agent/internal/config"
 )
 
 type DownloadOptions struct {
@@ -26,107 +25,75 @@ func DownloadImages(opts DownloadOptions) error {
 	}
 	defer pw.Stop()
 
-	// Facebook detects headless browsers and blocks gallery navigation.
-	// ALWAYS use visible mode. Use --start-minimized to hide the window.
+	// Use a persistent browser profile so login is remembered between runs
+	// This works like a real Chrome profile — cookies, storage, everything persists
+	home, _ := os.UserHomeDir()
+	profileDir := filepath.Join(home, ".super-agent", "browser-profile")
+	if err := os.MkdirAll(profileDir, 0755); err != nil {
+		return fmt.Errorf("could not create browser profile directory: %w", err)
+	}
+
 	fmt.Println("⚙️  Launching browser (visible mode required for Facebook)...")
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(false),
-		Args:     []string{"--start-minimized"},
+	context, err := pw.Chromium.LaunchPersistentContext(profileDir, playwright.BrowserTypeLaunchPersistentContextOptions{
+		Headless:  playwright.Bool(false),
+		Args:      []string{"--start-minimized"},
+		Viewport:  &playwright.Size{Width: 1920, Height: 1080},
+		UserAgent: playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
 	})
 	if err != nil {
 		return fmt.Errorf("could not launch browser: %w", err)
 	}
-	defer browser.Close()
+	defer context.Close()
 
-	cfg, _ := config.Load()
-	sessionPath := ""
-	if cfg != nil && cfg.Facebook.SessionPath != "" {
-		sessionPath = expandTilde(cfg.Facebook.SessionPath)
+	// Use the first page or create a new one
+	pages := context.Pages()
+	var page playwright.Page
+	if len(pages) > 0 {
+		page = pages[0]
 	} else {
-		home, _ := os.UserHomeDir()
-		sessionPath = filepath.Join(home, ".super-agent", "fb-session.json")
+		page, err = context.NewPage()
+		if err != nil {
+			return fmt.Errorf("could not create page: %w", err)
+		}
 	}
 
-	// If no saved session exists, open browser for manual login FIRST
-	if _, err := os.Stat(sessionPath); err != nil {
+	// Check if we need to login first by navigating to Facebook
+	fmt.Println("🔍 Checking Facebook login status...")
+	if _, err := page.Goto("https://www.facebook.com/"); err != nil {
+		return fmt.Errorf("could not navigate to Facebook: %w", err)
+	}
+	time.Sleep(3 * time.Second)
+
+	// Check if already logged in (navigation bar = logged in)
+	navBar := page.Locator(`div[role="navigation"]`).First()
+	navCount, _ := navBar.Count()
+	isLoggedIn := navCount > 0
+
+	if !isLoggedIn {
 		fmt.Println("═══════════════════════════════════════════════")
-		fmt.Println("🔐 No saved Facebook session found.")
-		fmt.Println("   A browser will open — please log in to Facebook manually.")
-		fmt.Println("   After login, your session will be saved automatically.")
-		fmt.Println("   You only need to do this ONCE!")
+		fmt.Println("🔐 Not logged in to Facebook.")
+		fmt.Println("   Please log in manually in the browser window.")
+		fmt.Println("   Your login will be remembered for all future runs!")
 		fmt.Println("═══════════════════════════════════════════════")
 
-		// Create a temporary context to login
-		loginCtx, err := browser.NewContext(playwright.BrowserNewContextOptions{
-			Viewport:  &playwright.Size{Width: 1280, Height: 720},
-			UserAgent: playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
-		})
-		if err != nil {
-			return fmt.Errorf("could not create login context: %w", err)
-		}
-
-		loginPage, err := loginCtx.NewPage()
-		if err != nil {
-			loginCtx.Close()
-			return fmt.Errorf("could not create login page: %w", err)
-		}
-
-		// Navigate to Facebook login
-		fmt.Println("🌐 Opening Facebook login page...")
-		if _, err := loginPage.Goto("https://www.facebook.com/"); err != nil {
-			loginCtx.Close()
-			return fmt.Errorf("could not open Facebook: %w", err)
-		}
-
-		// Wait for user to login — detect the navigation bar (only appears when logged in)
+		// Wait for user to login (detect navigation bar)
 		fmt.Println("⏳ Waiting for you to log in... (timeout: 5 minutes)")
-		fmt.Println("   👉 Log in with your Facebook account in the browser window")
-		_, err = loginPage.WaitForSelector(`div[role="navigation"]`, playwright.PageWaitForSelectorOptions{
+		_, err = page.WaitForSelector(`div[role="navigation"]`, playwright.PageWaitForSelectorOptions{
 			Timeout: playwright.Float(300000), // 5 minutes
 		})
 		if err != nil {
-			loginCtx.Close()
-			return fmt.Errorf("login timed out or failed: %w", err)
+			return fmt.Errorf("login timed out: %w", err)
 		}
 
-		// Give it extra time for cookies to settle
 		time.Sleep(3 * time.Second)
-		fmt.Println("✅ Login detected!")
-
-		// Save session after successful login
-		sessionDir := filepath.Dir(sessionPath)
-		if err := os.MkdirAll(sessionDir, 0755); err != nil {
-			loginCtx.Close()
-			return fmt.Errorf("could not create session directory: %w", err)
-		}
-		if _, err := loginCtx.StorageState(sessionPath); err != nil {
-			loginCtx.Close()
-			return fmt.Errorf("could not save session: %w", err)
-		}
-		fmt.Println("🔒 Session saved! You won't need to login again.")
+		fmt.Println("✅ Login successful! Your session is saved in the browser profile.")
+		fmt.Println("   You won't need to login again! 🎉")
 		fmt.Println("═══════════════════════════════════════════════")
-		loginCtx.Close()
 	} else {
-		fmt.Println("✅ Loaded saved Facebook session. No login needed.")
+		fmt.Println("✅ Already logged in to Facebook!")
 	}
 
-	// Now create the main context with the saved session loaded
-	contextOpts := playwright.BrowserNewContextOptions{
-		Viewport:         &playwright.Size{Width: 1920, Height: 1080},
-		UserAgent:        playwright.String("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
-		StorageStatePath: playwright.String(sessionPath),
-	}
-
-	context, err := browser.NewContext(contextOpts)
-	if err != nil {
-		return fmt.Errorf("could not create context: %w", err)
-	}
-
-	page, err := context.NewPage()
-	if err != nil {
-		return fmt.Errorf("could not create page: %w", err)
-	}
-
+	// Now navigate to the target post URL
 	fmt.Printf("🌐 Navigating to: %s\n", opts.URL)
 	if _, err := page.Goto(opts.URL); err != nil {
 		return fmt.Errorf("could not navigate: %w", err)
@@ -247,17 +214,8 @@ func DownloadImages(opts DownloadOptions) error {
 		time.Sleep(4 * time.Second)
 
 		if strings.Contains(page.URL(), "login") || strings.Contains(page.URL(), "two_factor") {
-			fmt.Println("   🛑 Login wall detected during download. Re-authenticating...")
-			if err := EnsureLoggedIn(page, context, fullURL, cfg); err != nil {
-				fmt.Printf("   ❌ Auto-login failed: %v\n", err)
-				break
-			}
-			// Re-navigate to the photo after login
-			if _, err := page.Goto(fullURL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded}); err != nil {
-				fmt.Printf("   ❌ %v\n", err)
-				continue
-			}
-			time.Sleep(4 * time.Second)
+			fmt.Println("   🛑 Login wall detected. Session may have expired.")
+			break
 		}
 
 		src := ""
