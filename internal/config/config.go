@@ -36,11 +36,12 @@ type LLMConfig struct {
 
 // FacebookConfig holds Facebook automation settings.
 type FacebookConfig struct {
-	SessionPath string   `yaml:"session_path"`
-	BusinessURL string   `yaml:"business_url"`
-	PageIDs     []string `yaml:"page_ids"`
-	Email       string   `yaml:"email"`
-	Password    string   `yaml:"password"`
+	SessionPath        string   `yaml:"session_path"`
+	BusinessURL        string   `yaml:"business_url"`
+	PageIDs            []string `yaml:"page_ids"`
+	Email              string   `yaml:"email"`
+	Password           string   `yaml:"password"`
+	BrowserProfilePath string   `yaml:"browser_profile_path"`
 }
 
 // ServerConfig holds API server settings.

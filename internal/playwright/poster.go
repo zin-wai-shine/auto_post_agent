@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/playwright-community/playwright-go"
+	"github.com/zinwaishine/super-agent/internal/config"
 )
 
 type PostOptions struct {
@@ -26,8 +27,16 @@ func PostListing(opts PostOptions) error {
 
 	home, _ := os.UserHomeDir()
 	profileDir := filepath.Join(home, ".super-agent", "browser-profile")
+
+	// Load configuration to check for custom profile path
+	cfg, _ := config.Load()
+	if cfg != nil && cfg.Facebook.BrowserProfilePath != "" {
+		profileDir = expandTilde(cfg.Facebook.BrowserProfilePath)
+		fmt.Printf("📂 Using custom browser profile: %s\n", profileDir)
+	}
+
 	if _, err := os.Stat(profileDir); err != nil {
-		return fmt.Errorf("no facebook profile found. Please run 'super-agent auth facebook' first or download an image to trigger login")
+		return fmt.Errorf("no facebook profile found at %s. Please run 'super-agent auth facebook' first", profileDir)
 	}
 
 	fmt.Println("🤖 Booting Playwright Sniper Bot...")

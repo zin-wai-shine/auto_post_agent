@@ -79,6 +79,7 @@ func editSettings(reader *bufio.Reader) {
 	fmt.Println("   5) Default Facebook Page ID")
 	fmt.Println("   6) Default LLM Model")
 	fmt.Println("   7) Default Business Facebook URL")
+	fmt.Println("   8) Browser Profile Path (Target your actual Chrome profile)")
 	fmt.Println("   0) Cancel")
 	fmt.Print("👉 Choose an option: ")
 
@@ -149,6 +150,16 @@ func editSettings(reader *bufio.Reader) {
 		input = strings.TrimSpace(input)
 		if input != "" {
 			cfg.Facebook.BusinessURL = input
+		}
+	case "8":
+		fmt.Printf("   Current Browser Profile Path: %s\n", cfg.Facebook.BrowserProfilePath)
+		fmt.Println("   ⚠️  WARNING: If you point this to your actual Chrome User Data,")
+		fmt.Println("      you MUST CLOSE Chrome before running the bot.")
+		fmt.Print("   New Browser Profile Path: ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+		if input != "" {
+			cfg.Facebook.BrowserProfilePath = input
 		}
 	case "0", "":
 		return

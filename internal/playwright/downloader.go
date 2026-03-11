@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/playwright-community/playwright-go"
+	"github.com/zinwaishine/super-agent/internal/config"
 )
 
 type DownloadOptions struct {
@@ -26,9 +27,16 @@ func DownloadImages(opts DownloadOptions) error {
 	defer pw.Stop()
 
 	// Use a persistent browser profile so login is remembered between runs
-	// This works like a real Chrome profile — cookies, storage, everything persists
 	home, _ := os.UserHomeDir()
 	profileDir := filepath.Join(home, ".super-agent", "browser-profile")
+
+	// Load configuration to check for custom profile path
+	cfg, _ := config.Load()
+	if cfg != nil && cfg.Facebook.BrowserProfilePath != "" {
+		profileDir = expandTilde(cfg.Facebook.BrowserProfilePath)
+		fmt.Printf("📂 Using custom browser profile: %s\n", profileDir)
+	}
+
 	if err := os.MkdirAll(profileDir, 0755); err != nil {
 		return fmt.Errorf("could not create browser profile directory: %w", err)
 	}

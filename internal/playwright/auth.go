@@ -14,8 +14,14 @@ import (
 // Authenticate opens a visible browser for the user to log into Facebook,
 // wait for them to log in successfully, and saves their session state to disk.
 func Authenticate() error {
+	cfg, _ := config.Load()
 	home, _ := os.UserHomeDir()
 	profileDir := filepath.Join(home, ".super-agent", "browser-profile")
+
+	if cfg != nil && cfg.Facebook.BrowserProfilePath != "" {
+		profileDir = expandTilde(cfg.Facebook.BrowserProfilePath)
+		fmt.Printf("📂 Using custom browser profile: %s\n", profileDir)
+	}
 	if err := os.MkdirAll(profileDir, 0755); err != nil {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
