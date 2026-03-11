@@ -109,7 +109,7 @@ func Authenticate() error {
 }
 
 // LoginWithCredentials automates Facebook login using credentials from config.
-// It types email/password into the login form and waits for navigation to confirm login.
+// It handles both the full login page AND inline modal popups.
 func LoginWithCredentials(page playwright.Page, cfg *config.Config) error {
 	email := cfg.Facebook.Email
 	password := cfg.Facebook.Password
@@ -126,62 +126,132 @@ func LoginWithCredentials(page playwright.Page, cfg *config.Config) error {
 	}
 	time.Sleep(3 * time.Second)
 
-	// Fill email
-	emailInput := page.Locator(`input[name="email"], input#email`)
-	if c, _ := emailInput.Count(); c > 0 {
-		emailInput.Click()
-		time.Sleep(500 * time.Millisecond)
-		emailInput.Fill(email)
-		fmt.Println("   ✅ Email entered")
-	} else {
+	return fillLoginForm(page, email, password)
+}
+
+// LoginViaModal fills credentials into an inline Facebook login modal/popup
+// that appears on the same page (e.g. private group posts showing "See more on Facebook").
+func LoginViaModal(page playwright.Page, cfg *config.Config) error {
+	email := cfg.Facebook.Email
+	password := cfg.Facebook.Password
+
+	if email == "" || password == "" {
+		return fmt.Errorf("no Facebook credentials in config. Run 'super-agent setting' to set email/password, or run 'super-agent auth facebook' for manual login")
+	}
+
+	fmt.Println("🔐 Logging in via Facebook popup modal...")
+
+	return fillLoginForm(page, email, password)
+}
+
+// fillLoginForm fills email and password into any visible Facebook login form
+// (works for both full login page and inline modals).
+func fillLoginForm(page playwright.Page, email, password string) error {
+	// Fill email — try multiple selectors for both modal and full-page login
+	emailSelectors := []string{
+		`input[name="email"]`,
+		`input#email`,
+		`input[type="email"]`,
+		`input[aria-label="Email address or phone number"]`,
+		`input[placeholder*="Email"]`,
+		`input[placeholder*="email"]`,
+		`input[placeholder*="phone"]`,
+	}
+
+	var emailFilled bool
+	for _, sel := range emailSelectors {
+		loc := page.Locator(sel).First()
+		if c, _ := loc.Count(); c > 0 {
+			if v, _ := loc.IsVisible(); v {
+				loc.Click()
+				time.Sleep(500 * time.Millisecond)
+				loc.Fill(email)
+				fmt.Println("   ✅ Email entered")
+				emailFilled = true
+				break
+			}
+		}
+	}
+	if !emailFilled {
 		return fmt.Errorf("could not find email input field")
 	}
 
 	// Fill password
-	passInput := page.Locator(`input[name="pass"], input#pass`)
-	if c, _ := passInput.Count(); c > 0 {
-		passInput.Click()
-		time.Sleep(500 * time.Millisecond)
-		passInput.Fill(password)
-		fmt.Println("   ✅ Password entered")
-	} else {
+	passSelectors := []string{
+		`input[name="pass"]`,
+		`input#pass`,
+		`input[type="password"]`,
+		`input[aria-label="Password"]`,
+		`input[placeholder*="Password"]`,
+		`input[placeholder*="password"]`,
+	}
+
+	var passFilled bool
+	for _, sel := range passSelectors {
+		loc := page.Locator(sel).First()
+		if c, _ := loc.Count(); c > 0 {
+			if v, _ := loc.IsVisible(); v {
+				loc.Click()
+				time.Sleep(500 * time.Millisecond)
+				loc.Fill(password)
+				fmt.Println("   ✅ Password entered")
+				passFilled = true
+				break
+			}
+		}
+	}
+	if !passFilled {
 		return fmt.Errorf("could not find password input field")
 	}
 
-	// Click login button
-	loginBtn := page.Locator(`button[name="login"], button[data-testid="royal_login_button"], button#loginbutton, input[type="submit"]`).First()
-	if c, _ := loginBtn.Count(); c > 0 {
-		loginBtn.Click()
-		fmt.Println("   🔄 Clicking Login...")
-	} else {
-		// Fallback: press Enter
-		page.Keyboard().Press("Enter")
-		fmt.Println("   🔄 Submitting login form...")
+	// Click login button — try multiple selectors
+	loginSelectors := []string{
+		`button[name="login"]`,
+		`button[data-testid="royal_login_button"]`,
+		`button#loginbutton`,
+		`div[aria-label="Log in"]`,
+		`div[aria-label="Log In"]`,
+		`button:has-text("Log in")`,
+		`button:has-text("Log In")`,
+		`input[type="submit"][value*="Log"]`,
 	}
 
-	// Wait for navigation (successful login redirects away from /login)
+	var clicked bool
+	for _, sel := range loginSelectors {
+		loc := page.Locator(sel).First()
+		if c, _ := loc.Count(); c > 0 {
+			if v, _ := loc.IsVisible(); v {
+				loc.Click()
+				fmt.Println("   🔄 Clicking Log In...")
+				clicked = true
+				break
+			}
+		}
+	}
+	if !clicked {
+		// Fallback: press Enter
+		page.Keyboard().Press("Enter")
+		fmt.Println("   🔄 Submitting login form via Enter...")
+	}
+
+	// Wait for login to process
 	time.Sleep(8 * time.Second)
 
 	currentURL := page.URL()
-	if strings.Contains(currentURL, "login") || strings.Contains(currentURL, "checkpoint") {
-		// Check for 2FA / checkpoint
-		if strings.Contains(currentURL, "checkpoint") || strings.Contains(currentURL, "two_factor") {
-			fmt.Println("⚠️  Two-factor authentication detected!")
-			fmt.Println("   Please complete 2FA in the browser window...")
-			// Wait up to 2 minutes for 2FA
-			for i := 0; i < 24; i++ {
-				time.Sleep(5 * time.Second)
-				url := page.URL()
-				if !strings.Contains(url, "checkpoint") && !strings.Contains(url, "two_factor") && !strings.Contains(url, "login") {
-					fmt.Println("   ✅ 2FA completed!")
-					break
-				}
-				if i == 23 {
-					return fmt.Errorf("2FA timed out after 2 minutes")
-				}
+	if strings.Contains(currentURL, "checkpoint") || strings.Contains(currentURL, "two_factor") {
+		fmt.Println("⚠️  Two-factor authentication detected!")
+		fmt.Println("   Please complete 2FA in the browser window...")
+		// Wait up to 2 minutes for 2FA
+		for i := 0; i < 24; i++ {
+			time.Sleep(5 * time.Second)
+			url := page.URL()
+			if !strings.Contains(url, "checkpoint") && !strings.Contains(url, "two_factor") && !strings.Contains(url, "login") {
+				fmt.Println("   ✅ 2FA completed!")
+				break
 			}
-		} else {
-			return fmt.Errorf("login may have failed — still on login page. Check credentials")
+			if i == 23 {
+				return fmt.Errorf("2FA timed out after 2 minutes")
+			}
 		}
 	}
 
@@ -189,51 +259,87 @@ func LoginWithCredentials(page playwright.Page, cfg *config.Config) error {
 	return nil
 }
 
-// EnsureLoggedIn checks if the current page shows a login wall.
+// EnsureLoggedIn checks if the current page shows a login wall or inline login modal.
 // If detected, it auto-logs in using config credentials and navigates back to the target URL.
 // It also saves the session state after successful login.
 func EnsureLoggedIn(page playwright.Page, context playwright.BrowserContext, targetURL string, cfg *config.Config) error {
 	currentURL := page.URL()
 
-	// Check if we hit a login wall
-	isLoginWall := strings.Contains(currentURL, "/login") ||
+	// Case 1: Full redirect to login page
+	isRedirectLogin := strings.Contains(currentURL, "/login") ||
 		strings.Contains(currentURL, "two_factor") ||
 		strings.Contains(currentURL, "checkpoint")
 
-	// Also check for login form presence on the page (Facebook sometimes shows inline login)
-	if !isLoginWall {
-		loginForm, _ := page.Locator(`form#login_form, form[action*="login"]`).Count()
-		emailField, _ := page.Locator(`input[name="email"]#email`).Count()
-		if loginForm > 0 && emailField > 0 {
-			isLoginWall = true
+	// Case 2: Inline modal popup ("See more on Facebook" popup with email/password)
+	// Facebook shows this on private group posts without changing the URL
+	isModalLogin := false
+	if !isRedirectLogin {
+		// Check for visible password input (strong indicator of login form)
+		passInput := page.Locator(`input[type="password"]`).First()
+		if c, _ := passInput.Count(); c > 0 {
+			if v, _ := passInput.IsVisible(); v {
+				isModalLogin = true
+			}
 		}
 	}
 
-	if !isLoginWall {
-		return nil // Already logged in
+	if !isRedirectLogin && !isModalLogin {
+		return nil // Already logged in, no login wall
 	}
 
-	fmt.Println("🛑 Login wall detected! Attempting auto-login...")
+	if isModalLogin {
+		fmt.Println("🛑 Facebook login modal detected! Logging in directly...")
 
-	if err := LoginWithCredentials(page, cfg); err != nil {
-		return err
-	}
-
-	// Save session after successful login
-	sessionPath := expandTilde(cfg.Facebook.SessionPath)
-	sessionDir := filepath.Dir(sessionPath)
-	if err := os.MkdirAll(sessionDir, 0755); err == nil {
-		if _, err := context.StorageState(sessionPath); err == nil {
-			fmt.Println("🔒 Session saved for future use:", sessionPath)
+		// Fill credentials directly in the modal popup
+		if err := LoginViaModal(page, cfg); err != nil {
+			return err
 		}
-	}
 
-	// Navigate back to the target URL
-	fmt.Printf("🌐 Navigating back to: %s\n", targetURL)
-	if _, err := page.Goto(targetURL); err != nil {
-		return fmt.Errorf("could not navigate back to target: %w", err)
+		// After modal login, Facebook usually reloads the page or removes the modal
+		time.Sleep(5 * time.Second)
+
+		// Save session
+		sessionPath := expandTilde(cfg.Facebook.SessionPath)
+		sessionDir := filepath.Dir(sessionPath)
+		if err := os.MkdirAll(sessionDir, 0755); err == nil {
+			if _, err := context.StorageState(sessionPath); err == nil {
+				fmt.Println("🔒 Session saved for future use:", sessionPath)
+			}
+		}
+
+		// Check if we need to re-navigate (modal might have redirected)
+		newURL := page.URL()
+		if newURL != targetURL && !strings.Contains(newURL, "permalink") && !strings.Contains(newURL, "photo") {
+			fmt.Printf("🌐 Navigating back to: %s\n", targetURL)
+			if _, err := page.Goto(targetURL); err != nil {
+				return fmt.Errorf("could not navigate back to target: %w", err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+	} else {
+		// Full redirect login
+		fmt.Println("🛑 Login redirect detected! Attempting auto-login...")
+
+		if err := LoginWithCredentials(page, cfg); err != nil {
+			return err
+		}
+
+		// Save session
+		sessionPath := expandTilde(cfg.Facebook.SessionPath)
+		sessionDir := filepath.Dir(sessionPath)
+		if err := os.MkdirAll(sessionDir, 0755); err == nil {
+			if _, err := context.StorageState(sessionPath); err == nil {
+				fmt.Println("🔒 Session saved for future use:", sessionPath)
+			}
+		}
+
+		// Navigate back to the target URL
+		fmt.Printf("🌐 Navigating back to: %s\n", targetURL)
+		if _, err := page.Goto(targetURL); err != nil {
+			return fmt.Errorf("could not navigate back to target: %w", err)
+		}
+		time.Sleep(5 * time.Second)
 	}
-	time.Sleep(5 * time.Second)
 
 	return nil
 }
