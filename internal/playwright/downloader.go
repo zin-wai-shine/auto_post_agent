@@ -191,6 +191,11 @@ func DownloadImages(opts DownloadOptions) error {
 		}
 
 		currURL := page.URL()
+		if isCommerce() {
+			fmt.Println("   🛍️  Late redirect to commerce listing. Switching logic...")
+			return downloadCommerceImages(page, opts)
+		}
+
 		if !uniqueURLs[currURL] && (strings.Contains(currURL, "/photo") || strings.Contains(currURL, "fbid=")) {
 			uniqueURLs[currURL] = true
 			urlList = append(urlList, currURL)
@@ -245,7 +250,7 @@ func DownloadImages(opts DownloadOptions) error {
 			fmt.Println("   ✅ Wrap-around. Discovery complete.")
 			break
 		}
-		if staleRuns >= 8 {
+		if staleRuns >= 10 { // Increased tolerance
 			fmt.Printf("   🏁 Stale for %d rounds. Stopping.\n", staleRuns)
 			break
 		}
@@ -321,75 +326,72 @@ func DownloadImages(opts DownloadOptions) error {
 }
 
 func downloadCommerceImages(page playwright.Page, opts DownloadOptions) error {
-	fmt.Println("🛍️  Commerce listing detected. Using thumbnail navigation...")
-
-	// Find all thumbnails
+	// 1. Wait for thumbnails to load
+	page.WaitForSelector(`div[aria-label^="Thumbnail"]`, playwright.PageWaitForSelectorOptions{Timeout: playwright.Float(10000)})
 	thumbnailButtons := page.Locator(`div[aria-label^="Thumbnail"]`)
 	thumbCount, _ := thumbnailButtons.Count()
 
+	fmt.Printf("   📸 Found %d listing thumbnails. Starting extraction...\n", thumbCount)
+	downloadedSrcs := make(map[string]bool)
+	downloadedCount := 0
+
 	// Helper to find the ACTUAL large image via JS
-	getHeroSrc := func() (string, error) {
-		srcObj, err := page.Evaluate(`
+	getHeroSrc := func() string {
+		found, _ := page.Evaluate(`
 			() => {
-				const imgs = Array.from(document.querySelectorAll('img.xz74otr.x15mokao, img[alt^="Listing image"]'));
+				const imgs = Array.from(document.querySelectorAll('img.xz74otr.x15mokao, img[alt^="Listing image"], div[role="dialog"] img'));
 				const hero = imgs.find(img => {
 					const isVisible = img.offsetWidth > 0 && img.offsetHeight > 0;
-					const isLarge = img.naturalWidth > 500 || img.naturalHeight > 500;
+					const isLarge = img.naturalWidth >= 300 || img.naturalHeight >= 300; 
 					const inButton = img.closest('button') || img.closest('[role="button"]');
-					return isVisible && isLarge && !inButton;
+					return isVisible && isLarge && (!inButton || img.offsetWidth > 400); 
 				});
 				return hero ? hero.getAttribute('src') : "";
 			}
 		`)
-		if err != nil || srcObj == nil {
-			return "", err
+		if found != nil {
+			return found.(string)
 		}
-		return srcObj.(string), nil
+		return ""
 	}
 
-	if thumbCount == 0 {
-		fmt.Println("   ⚠️  No thumbnails found, trying to download main image...")
-		src, _ := getHeroSrc()
-		if src != "" {
-			filePath := filepath.Join(opts.SavePath, "listing_image_1.jpg")
-			if err := downloadFile(src, filePath); err == nil {
-				fmt.Println("   ✅ Downloaded primary image.")
-				return nil
-			}
-		}
-		return fmt.Errorf("could not find any images on this commerce page")
-	}
-
-	fmt.Printf("   📸 Found %d listing images. Starting download...\n", thumbCount)
-	downloadedCount := 0
+	// PHASE 1: Iterate via thumbnails
 	for i := 0; i < thumbCount; i++ {
-		// Click the thumbnail to load high-res
 		thumbnailButtons.Nth(i).Click(playwright.LocatorClickOptions{Force: playwright.Bool(true)})
+		time.Sleep(2 * time.Second)
 
-		// Wait and retry searching for the HERO image (high res)
-		// We avoid fallbacks because they usually hit emojis
-		src := ""
-		for retry := 0; retry < 5; retry++ {
-			time.Sleep(1 * time.Second)
-			found, _ := getHeroSrc()
-			if found != "" {
-				src = found
-				break
+		src := getHeroSrc()
+		if src != "" && !downloadedSrcs[src] {
+			fileName := fmt.Sprintf("listing_image_%d.jpg", downloadedCount+1)
+			filePath := filepath.Join(opts.SavePath, fileName)
+			if err := downloadFile(src, filePath); err == nil {
+				fmt.Printf("   ✅ [%d] %s\n", downloadedCount+1, fileName)
+				downloadedSrcs[src] = true
+				downloadedCount++
 			}
 		}
+	}
 
-		if src == "" {
-			fmt.Printf("   ❌ [%d/%d] Could not find high-res image (skipped emoji/hidden)\n", i+1, thumbCount)
-			continue
-		}
+	// PHASE 2: Cycle via 'Next' button
+	fmt.Println("   🔍 Checking for additional hidden images...")
+	for i := 0; i < 20; i++ {
+		nextBtn := page.Locator(`div[aria-label="View next image"], div[aria-label="Next"], [aria-label*="Next photo"]`).First()
+		if count, _ := nextBtn.Count(); count > 0 {
+			nextBtn.Click(playwright.LocatorClickOptions{Force: playwright.Bool(true)})
+			time.Sleep(1500 * time.Millisecond)
 
-		fileName := fmt.Sprintf("listing_image_%d.jpg", i+1)
-		filePath := filepath.Join(opts.SavePath, fileName)
-		if err := downloadFile(src, filePath); err != nil {
-			fmt.Printf("   ❌ [%d/%d] Failed: %v\n", i+1, thumbCount, err)
+			src := getHeroSrc()
+			if src != "" && !downloadedSrcs[src] {
+				fileName := fmt.Sprintf("listing_image_%d.jpg", downloadedCount+1)
+				filePath := filepath.Join(opts.SavePath, fileName)
+				if err := downloadFile(src, filePath); err == nil {
+					fmt.Printf("   ✅ [%d] %s (extra)\n", downloadedCount+1, fileName)
+					downloadedSrcs[src] = true
+					downloadedCount++
+				}
+			}
 		} else {
-			fmt.Printf("   ✅ [%d/%d] %s\n", i+1, thumbCount, fileName)
-			downloadedCount++
+			break
 		}
 	}
 
