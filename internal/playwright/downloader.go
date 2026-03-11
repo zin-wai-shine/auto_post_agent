@@ -47,9 +47,14 @@ func DownloadImages(opts DownloadOptions) error {
 		sessionPath = filepath.Join(home, ".super-agent", "fb-session.json")
 	}
 
-	// If no saved session exists, login first BEFORE navigating to the post
+	// If no saved session exists, open browser for manual login FIRST
 	if _, err := os.Stat(sessionPath); err != nil {
-		fmt.Println("🔐 No saved Facebook session found. Logging in first...")
+		fmt.Println("═══════════════════════════════════════════════")
+		fmt.Println("🔐 No saved Facebook session found.")
+		fmt.Println("   A browser will open — please log in to Facebook manually.")
+		fmt.Println("   After login, your session will be saved automatically.")
+		fmt.Println("   You only need to do this ONCE!")
+		fmt.Println("═══════════════════════════════════════════════")
 
 		// Create a temporary context to login
 		loginCtx, err := browser.NewContext(playwright.BrowserNewContextOptions{
@@ -66,10 +71,27 @@ func DownloadImages(opts DownloadOptions) error {
 			return fmt.Errorf("could not create login page: %w", err)
 		}
 
-		if err := LoginWithCredentials(loginPage, cfg); err != nil {
+		// Navigate to Facebook login
+		fmt.Println("🌐 Opening Facebook login page...")
+		if _, err := loginPage.Goto("https://www.facebook.com/"); err != nil {
 			loginCtx.Close()
-			return fmt.Errorf("auto-login failed: %w", err)
+			return fmt.Errorf("could not open Facebook: %w", err)
 		}
+
+		// Wait for user to login — detect the navigation bar (only appears when logged in)
+		fmt.Println("⏳ Waiting for you to log in... (timeout: 5 minutes)")
+		fmt.Println("   👉 Log in with your Facebook account in the browser window")
+		_, err = loginPage.WaitForSelector(`div[role="navigation"]`, playwright.PageWaitForSelectorOptions{
+			Timeout: playwright.Float(300000), // 5 minutes
+		})
+		if err != nil {
+			loginCtx.Close()
+			return fmt.Errorf("login timed out or failed: %w", err)
+		}
+
+		// Give it extra time for cookies to settle
+		time.Sleep(3 * time.Second)
+		fmt.Println("✅ Login detected!")
 
 		// Save session after successful login
 		sessionDir := filepath.Dir(sessionPath)
@@ -81,7 +103,8 @@ func DownloadImages(opts DownloadOptions) error {
 			loginCtx.Close()
 			return fmt.Errorf("could not save session: %w", err)
 		}
-		fmt.Println("🔒 Session saved! You won't need to login again:", sessionPath)
+		fmt.Println("🔒 Session saved! You won't need to login again.")
+		fmt.Println("═══════════════════════════════════════════════")
 		loginCtx.Close()
 	} else {
 		fmt.Println("✅ Loaded saved Facebook session. No login needed.")
