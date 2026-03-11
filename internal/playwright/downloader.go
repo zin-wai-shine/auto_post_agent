@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,29 @@ type DownloadOptions struct {
 	URL      string
 	SavePath string
 	Headless bool
+}
+
+func extractFBID(urlStr string) string {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	fbid := q.Get("fbid")
+	if fbid != "" {
+		return fbid
+	}
+
+	// Sometimes it's in the path: /photo/?fbid=123... vs /photo/123/
+	parts := strings.Split(u.Path, "/")
+	for i, p := range parts {
+		if (p == "photo" || p == "photos") && i+1 < len(parts) {
+			if len(parts[i+1]) > 5 && strings.ContainsAny(parts[i+1], "0123456789") {
+				return parts[i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func DownloadImages(opts DownloadOptions) error {
@@ -145,22 +169,43 @@ func DownloadImages(opts DownloadOptions) error {
 	// PHASE 1: DISCOVER ALL PHOTO URLs VIA THEATER NAVIGATION
 	fmt.Println("📜 Phase 1: Discovering all photo URLs via theater gallery...")
 
-	// Open theater mode
+	// Open theater mode - NEW STRATEGY:
+	// Instead of clicking elements (which limits the carousel to the 5 preview images in shared posts),
+	// we extract the href of the first photo and navigate to it directly. This forces the FULL gallery to load.
 	entrySelectors := []string{
-		`a[href*="/photo/"] img`,
-		`a[href*="/photo.php"] img`,
-		`a[href*="/photos/"] img`,
+		`a[href*="/photo/"]`,
+		`a[href*="/photo.php"]`,
+		`a[href*="/photos/"]`,
 	}
+
+	opened := false
 	for _, sel := range entrySelectors {
 		loc := page.Locator(sel).First()
 		if c, _ := loc.Count(); c > 0 {
 			if v, _ := loc.IsVisible(); v {
-				fmt.Println("   📸 Opening theater gallery...")
-				loc.Click(playwright.LocatorClickOptions{Force: playwright.Bool(true)})
-				time.Sleep(5 * time.Second)
-				break
+				href, _ := loc.GetAttribute("href")
+				if href != "" {
+					fullURL := href
+					if strings.HasPrefix(href, "/") {
+						fullURL = "https://www.facebook.com" + href
+					} else if !strings.HasPrefix(href, "http") {
+						fullURL = "https://www.facebook.com/" + href
+					}
+
+					fmt.Println("   📸 Breaking out of preview modal. Navigating directly to full theater gallery...")
+					page.Goto(fullURL, playwright.PageGotoOptions{
+						WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+					})
+					opened = true
+					time.Sleep(5 * time.Second)
+					break
+				}
 			}
 		}
+	}
+
+	if !opened {
+		fmt.Println("   ⚠️  Could not find any photos to click or navigate to.")
 	}
 
 	// RE-CHECK: Did opening theater mode redirect us to a Commerce listing?
@@ -243,14 +288,23 @@ func DownloadImages(opts DownloadOptions) error {
 		`)
 
 		page.Keyboard().Press("ArrowRight")
-		time.Sleep(2500 * time.Millisecond) // Slightly longer wait for JS execution
+		time.Sleep(3 * time.Second) // Important: give React time to update the URL
 
-		// Wrap-around
-		if len(urlList) > 1 && currURL == urlList[0] {
-			fmt.Println("   ✅ Wrap-around. Discovery complete.")
-			break
+		// Wrap-around checking
+		if len(urlList) > 1 {
+			// Compare just the critical parts of the URL to detect wrap-around
+			// because FB sometimes adds tracking parameters on subsequent views
+			if extractFBID(currURL) != "" && extractFBID(currURL) == extractFBID(urlList[0]) {
+				fmt.Println("   ✅ Wrap-around detected (same photo ID). Discovery complete.")
+				break
+			}
+
+			if currURL == urlList[0] {
+				fmt.Println("   ✅ Wrap-around detected (exact URL). Discovery complete.")
+				break
+			}
 		}
-		if staleRuns >= 10 { // Increased tolerance
+		if staleRuns >= 15 { // Greatly Increased tolerance
 			fmt.Printf("   🏁 Stale for %d rounds. Stopping.\n", staleRuns)
 			break
 		}
