@@ -364,19 +364,22 @@ func downloadCommerceImages(page playwright.Page, opts DownloadOptions) error {
 	downloadedCount := 0
 	for i := 0; i < thumbCount; i++ {
 		// Click the thumbnail to load high-res
-		// We force click even index 0 to ensure the hero image refreshes from any placeholder
 		thumbnailButtons.Nth(i).Click(playwright.LocatorClickOptions{Force: playwright.Bool(true)})
-		time.Sleep(2 * time.Second)
 
-		// Find the main image using a robust evaluation that skips emojis/icons
-		src, err := getHeroSrc()
-		if err != nil || src == "" {
-			// Emergency fallback if helper fails
-			mainImg := page.Locator(`img.xz74otr.x15mokao, img[alt^="Listing image"]`).First()
-			src, _ = mainImg.GetAttribute("src")
+		// Wait and retry searching for the HERO image (high res)
+		// We avoid fallbacks because they usually hit emojis
+		src := ""
+		for retry := 0; retry < 5; retry++ {
+			time.Sleep(1 * time.Second)
+			found, _ := getHeroSrc()
+			if found != "" {
+				src = found
+				break
+			}
 		}
 
 		if src == "" {
+			fmt.Printf("   ❌ [%d/%d] Could not find high-res image (skipped emoji/hidden)\n", i+1, thumbCount)
 			continue
 		}
 
