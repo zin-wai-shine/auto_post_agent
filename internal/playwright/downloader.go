@@ -41,7 +41,7 @@ func DownloadImages(opts DownloadOptions) error {
 	cfg, _ := config.Load()
 	sessionPath := ""
 	if cfg != nil && cfg.Facebook.SessionPath != "" {
-		sessionPath = cfg.Facebook.SessionPath
+		sessionPath = expandTilde(cfg.Facebook.SessionPath)
 	} else {
 		home, _ := os.UserHomeDir()
 		sessionPath = filepath.Join(home, ".super-agent", "fb-session.json")
@@ -70,6 +70,11 @@ func DownloadImages(opts DownloadOptions) error {
 		return fmt.Errorf("could not navigate: %w", err)
 	}
 	time.Sleep(5 * time.Second)
+
+	// Check if we hit a login wall (e.g. private group posts)
+	if err := EnsureLoggedIn(page, context, opts.URL, cfg); err != nil {
+		return fmt.Errorf("auto-login failed: %w", err)
+	}
 
 	if err := os.MkdirAll(opts.SavePath, os.ModePerm); err != nil {
 		return fmt.Errorf("could not create directory: %w", err)
@@ -185,8 +190,17 @@ func DownloadImages(opts DownloadOptions) error {
 		time.Sleep(4 * time.Second)
 
 		if strings.Contains(page.URL(), "login") || strings.Contains(page.URL(), "two_factor") {
-			fmt.Println("   🛑 Login wall.")
-			break
+			fmt.Println("   🛑 Login wall detected during download. Re-authenticating...")
+			if err := EnsureLoggedIn(page, context, fullURL, cfg); err != nil {
+				fmt.Printf("   ❌ Auto-login failed: %v\n", err)
+				break
+			}
+			// Re-navigate to the photo after login
+			if _, err := page.Goto(fullURL, playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateDomcontentloaded}); err != nil {
+				fmt.Printf("   ❌ %v\n", err)
+				continue
+			}
+			time.Sleep(4 * time.Second)
 		}
 
 		src := ""

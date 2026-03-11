@@ -39,6 +39,8 @@ type FacebookConfig struct {
 	SessionPath string   `yaml:"session_path"`
 	BusinessURL string   `yaml:"business_url"`
 	PageIDs     []string `yaml:"page_ids"`
+	Email       string   `yaml:"email"`
+	Password    string   `yaml:"password"`
 }
 
 // ServerConfig holds API server settings.
