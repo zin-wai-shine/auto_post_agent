@@ -100,6 +100,25 @@ func DownloadImages(opts DownloadOptions) error {
 	}
 	time.Sleep(5 * time.Second)
 
+	// RE-CHECK: Facebook often shows an overlay/modal on the specific post page
+	// even if the root was "logged in". We check for login indicators again.
+	if count, _ := page.Locator(`input[type="password"]`).Count(); count > 0 {
+		fmt.Println("═══════════════════════════════════════════════")
+		fmt.Println("🛑 Login Wall detected on the Post Page!")
+		fmt.Println("   Please finish logging in in the browser window.")
+		fmt.Println("   The bot will wait for you...")
+		fmt.Println("═══════════════════════════════════════════════")
+
+		_, err = page.WaitForSelector(`div[role="navigation"]`, playwright.PageWaitForSelectorOptions{
+			Timeout: playwright.Float(300000),
+		})
+		if err != nil {
+			return fmt.Errorf("login failed or timed out: %w", err)
+		}
+		fmt.Println("✅ Login successful! Continuing...")
+		time.Sleep(3 * time.Second)
+	}
+
 	if err := os.MkdirAll(opts.SavePath, os.ModePerm); err != nil {
 		return fmt.Errorf("could not create directory: %w", err)
 	}
@@ -131,6 +150,16 @@ func DownloadImages(opts DownloadOptions) error {
 	lastCount := 0
 
 	for i := 0; i < 70; i++ {
+		// Recovery: If we are failing to find photos, check if we were logged out/kicked to login
+		if staleRuns > 3 && (strings.Contains(page.URL(), "login") || strings.Contains(page.URL(), "checkpoint")) {
+			fmt.Println("   ⚠️  Detected login wall during discovery. Please log in again...")
+			page.WaitForSelector(`div[role="navigation"]`, playwright.PageWaitForSelectorOptions{
+				Timeout: playwright.Float(300000),
+			})
+			fmt.Println("   ✅ Resuming...")
+			staleRuns = 0
+		}
+
 		// Safe dialog focus
 		if i%5 == 0 {
 			page.Evaluate(`(function(){ const d = document.querySelector('div[role="dialog"]'); if(d) d.focus(); })()`)
