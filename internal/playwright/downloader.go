@@ -131,6 +131,60 @@ func DownloadImages(opts DownloadOptions) error {
 		return fmt.Errorf("could not create directory: %w", err)
 	}
 
+	// NEW: Special Handling for Commerce / Marketplace Listings
+	if strings.Contains(opts.URL, "/commerce/listing/") || strings.Contains(opts.URL, "/marketplace/item/") {
+		fmt.Println("🛍️  Commerce listing detected. Using thumbnail navigation...")
+
+		// Find all thumbnails
+		thumbnailButtons := page.Locator(`div[aria-label^="Thumbnail"]`)
+		thumbCount, _ := thumbnailButtons.Count()
+
+		if thumbCount == 0 {
+			// Try to grab at least the single main image if no thumbnails exist
+			fmt.Println("   ⚠️  No thumbnails found, trying to download main image...")
+			mainImg := page.Locator(`img.xz74otr.x15mokao, img[alt^="Listing image"]`).First()
+			src, _ := mainImg.GetAttribute("src")
+			if src != "" {
+				filePath := filepath.Join(opts.SavePath, "listing_image_1.jpg")
+				if err := downloadFile(src, filePath); err == nil {
+					fmt.Println("   ✅ Downloaded primary image.")
+					return nil
+				}
+			}
+			return fmt.Errorf("could not find any images on this commerce page")
+		}
+
+		fmt.Printf("   📸 Found %d listing images. Starting download...\n", thumbCount)
+		downloadedCount := 0
+		for i := 0; i < thumbCount; i++ {
+			// Click the thumbnail to load high-res
+			thumbnailButtons.Nth(i).Click()
+			time.Sleep(1500 * time.Millisecond)
+
+			// Find the main image that matches common marketplace classes
+			mainImg := page.Locator(`img.xz74otr.x15mokao, img[alt^="Listing image"]`).First()
+			src, err := mainImg.GetAttribute("src")
+			if err != nil || src == "" {
+				continue
+			}
+
+			fileName := fmt.Sprintf("listing_image_%d.jpg", i+1)
+			filePath := filepath.Join(opts.SavePath, fileName)
+			if err := downloadFile(src, filePath); err != nil {
+				fmt.Printf("   ❌ [%d/%d] Failed: %v\n", i+1, thumbCount, err)
+			} else {
+				fmt.Printf("   ✅ [%d/%d] %s\n", i+1, thumbCount, fileName)
+				downloadedCount++
+			}
+		}
+
+		if downloadedCount > 0 {
+			fmt.Printf("\n🎉 MISSION COMPLETE: %d images downloaded to %s\n", downloadedCount, opts.SavePath)
+			return nil
+		}
+		return fmt.Errorf("failed to download any commerce images")
+	}
+
 	// PHASE 1: DISCOVER ALL PHOTO URLs VIA THEATER NAVIGATION
 	fmt.Println("📜 Phase 1: Discovering all photo URLs via theater gallery...")
 
